@@ -1,0 +1,4 @@
+.env
+config/config.yml
+config/epusdt/
+data/

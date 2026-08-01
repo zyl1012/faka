@@ -1,0 +1,105 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: dujiaonext-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    command:
+      - redis-server
+      - --dir
+      - /data
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - dujiao-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dujiaonext-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - dujiao-net
+
+  dujiao-next:
+    image: dujiaonext/dujiao-next:${TAG}
+    container_name: dujiao-next
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      DJ_DEFAULT_ADMIN_USERNAME: ${DJ_DEFAULT_ADMIN_USERNAME:?set DJ_DEFAULT_ADMIN_USERNAME in .env}
+      DJ_DEFAULT_ADMIN_PASSWORD: ${DJ_DEFAULT_ADMIN_PASSWORD:?set DJ_DEFAULT_ADMIN_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${APP_PORT}:8080"
+    volumes:
+      - ./config/config.yml:/app/config.yml:ro
+      - ./data/uploads:/app/uploads
+      - ./data/logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - dujiao-net
+
+  epusdt:
+    build:
+      context: ./docker/epusdt
+      args:
+        EPUSDT_VERSION: ${EPUSDT_TAG}
+    image: epusdt-postgres:${EPUSDT_TAG}
+    container_name: epusdt
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      EPUSDT_CONFIG: /app/conf/epusdt.env
+    ports:
+      - "127.0.0.1:${EPUSDT_PORT}:8000"
+    volumes:
+      - ./config/epusdt:/app/conf
+      - ./data/epusdt:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - dujiao-net
+
+networks:
+  dujiao-net:
+    driver: bridge

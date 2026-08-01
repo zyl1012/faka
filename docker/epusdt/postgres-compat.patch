@@ -1,0 +1,94 @@
+diff --git a/src/go.mod b/src/go.mod
+index 8dc83a4..63c3328 100644
+--- a/src/go.mod
++++ b/src/go.mod
+@@ -29,9 +29,9 @@ require (
+ 	golang.org/x/sync v0.19.0
+ 	gopkg.in/telebot.v3 v3.0.0
+ 	gorm.io/driver/mysql v1.5.1
+-	gorm.io/driver/postgres v1.5.2
++	gorm.io/driver/postgres v1.6.2
+ 	gorm.io/driver/sqlite v1.6.0
+-	gorm.io/gorm v1.31.1
++	gorm.io/gorm v1.31.2
+ )
+ 
+ require (
+diff --git a/src/model/data/admin_user_data.go b/src/model/data/admin_user_data.go
+index 65e332c..431ff47 100644
+--- a/src/model/data/admin_user_data.go
++++ b/src/model/data/admin_user_data.go
+@@ -81,7 +81,8 @@ func EnsureDefaultAdmin() (password string, created bool, err error) {
+ 
+ func purgeDeletedInitialAdminPasswordPlainTx(tx *gorm.DB) error {
+ 	return tx.Unscoped().
+-		Where("`key` = ? AND deleted_at IS NOT NULL", mdb.SettingKeyInitAdminPasswordPlain).
++		Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: mdb.SettingKeyInitAdminPasswordPlain}).
++		Where("deleted_at IS NOT NULL").
+ 		Delete(&mdb.Setting{}).Error
+ }
+ 
+@@ -163,7 +164,7 @@ func upsertSettingRow(tx *gorm.DB, row mdb.Setting) error {
+ func GetInitialAdminPassword() (string, error) {
+ 	row := new(mdb.Setting)
+ 	if err := dao.Mdb.Model(&mdb.Setting{}).
+-		Where("`key` = ?", mdb.SettingKeyInitAdminPasswordPlain).
++		Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: mdb.SettingKeyInitAdminPasswordPlain}).
+ 		Limit(1).
+ 		Find(row).Error; err != nil {
+ 		return "", err
+@@ -174,7 +175,7 @@ func GetInitialAdminPassword() (string, error) {
+ 
+ 	var fetched mdb.Setting
+ 	if err := dao.Mdb.Model(&mdb.Setting{}).
+-		Where("`key` = ?", mdb.SettingKeyInitAdminPasswordFetched).
++		Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: mdb.SettingKeyInitAdminPasswordFetched}).
+ 		Limit(1).
+ 		Find(&fetched).Error; err != nil {
+ 		return "", err
+@@ -187,7 +188,7 @@ func GetInitialAdminPassword() (string, error) {
+ 
+ func clearInitialAdminPasswordPlain(tx *gorm.DB) error {
+ 	res := tx.Unscoped().
+-		Where("`key` = ?", mdb.SettingKeyInitAdminPasswordPlain).
++		Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: mdb.SettingKeyInitAdminPasswordPlain}).
+ 		Delete(&mdb.Setting{})
+ 	if res.Error != nil {
+ 		return res.Error
+@@ -283,7 +284,7 @@ func UpdateAdminUserPassword(id uint64, newPlain string) error {
+ 
+ 		var plainRow mdb.Setting
+ 		if err := tx.Model(&mdb.Setting{}).
+-			Where("`key` = ?", mdb.SettingKeyInitAdminPasswordPlain).
++			Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: mdb.SettingKeyInitAdminPasswordPlain}).
+ 			Limit(1).
+ 			Find(&plainRow).Error; err != nil {
+ 			return err
+@@ -295,7 +296,7 @@ func UpdateAdminUserPassword(id uint64, newPlain string) error {
+ 		// clear any leftover plaintext if it exists.
+ 		var initHashRow mdb.Setting
+ 		if err := tx.Model(&mdb.Setting{}).
+-			Where("`key` = ?", mdb.SettingKeyInitAdminPasswordHash).
++			Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: mdb.SettingKeyInitAdminPasswordHash}).
+ 			Limit(1).
+ 			Find(&initHashRow).Error; err != nil {
+ 			return err
+diff --git a/src/model/data/settings_data.go b/src/model/data/settings_data.go
+index f17dd6d..c55c0a9 100644
+--- a/src/model/data/settings_data.go
++++ b/src/model/data/settings_data.go
+@@ -283,11 +283,11 @@ func GetOkPayAllowTokens() []string {
+ // ListSettingsByGroup returns all rows for a given group (empty group = all),
+ // excluding any keys in sensitiveSettingKeys.
+ func ListSettingsByGroup(group string) ([]mdb.Setting, error) {
+ 	var rows []mdb.Setting
+-	tx := dao.Mdb.Model(&mdb.Setting{}).Not("`key`", sensitiveSettingKeys)
++	tx := dao.Mdb.Model(&mdb.Setting{}).Not(map[string]interface{}{"key": sensitiveSettingKeys})
+ 	if group != "" {
+-		tx = tx.Where("`group` = ?", group)
++		tx = tx.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: group})
+ 	}
+-	err := tx.Order("`key` ASC").Find(&rows).Error
++	err := tx.Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}}).Find(&rows).Error
+ 	return rows, err
+ }
