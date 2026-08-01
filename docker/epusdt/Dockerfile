@@ -33,6 +33,9 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /source/src/.env.example /app/.env
 COPY --from=builder /app/epusdt /app/epusdt
+COPY docker-entrypoint.sh /usr/local/bin/epusdt-entrypoint
+RUN chmod 0755 /usr/local/bin/epusdt-entrypoint
 
 VOLUME /app/conf
-ENTRYPOINT ["./epusdt", "http", "start"]
+ENTRYPOINT ["/usr/local/bin/epusdt-entrypoint"]
+CMD ["./epusdt", "http", "start"]

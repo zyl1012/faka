@@ -6,22 +6,64 @@
 - EPUSDT `v2.0.0` 收款平台
 - PostgreSQL 16
 - Redis 7
+- Nginx 1.30 反向代理
 
-两个应用共用同一个 PostgreSQL 实例，但使用相互独立的数据库和账号。PostgreSQL、Redis 均不映射到宿主机端口；两个 Web 服务只监听宿主机 `127.0.0.1`，生产环境应通过 Nginx 或其他反向代理提供 HTTPS 访问。
+两个应用共用同一个 PostgreSQL 实例，但使用相互独立的数据库和账号。PostgreSQL、Redis 均不映射到宿主机端口；两个应用的直连端口只监听宿主机 `127.0.0.1`，Nginx 通过宿主机端口 `80` 对外提供域名访问。
 
 ## 服务和入口
 
-| 服务 | 宿主机入口 | 容器内地址 | 说明 |
+以下地址以 `.env` 中 `BASE_DOMAIN=abc123.com`、`PUBLIC_SCHEME=http` 为例：
+
+| 服务 | 域名入口 | 本机直连入口 | 说明 |
 | --- | --- | --- | --- |
-| Dujiao-Next 前台 | `http://127.0.0.1:8080/` | `http://dujiao-next:8080` | 发卡商城 |
-| Dujiao-Next 后台 | `http://127.0.0.1:8080/dj-mgmt-c1379b345ceb/` | 同上 | 后台路径来自 `config/config.yml`，不是 `/admin` |
-| EPUSDT 后台 | `http://127.0.0.1:8000/admin` | `http://epusdt:8000/admin` | 钱包、链、API Key 和订单管理 |
-| PostgreSQL | 不对宿主机开放 | `postgres:5432` | 两个独立数据库 |
-| Redis | 不对宿主机开放 | `redis:6379` | Dujiao 缓存和队列 |
+| Dujiao-Next 前台 | `http://www.abc123.com/` | `http://127.0.0.1:8080/` | 发卡商城 |
+| Dujiao-Next 后台 | `http://www.abc123.com/dj-mgmt-c1379b345ceb/` | `http://127.0.0.1:8080/dj-mgmt-c1379b345ceb/` | 后台路径来自 `config/config.yml`，不是 `/admin` |
+| EPUSDT 后台 | `http://epusdt.abc123.com/admin` | `http://127.0.0.1:8000/admin` | 钱包、链、API Key 和订单管理 |
+| Nginx | 根域名自动跳转到 `www` | `http://127.0.0.1/nginx-health` | 未匹配的 Host 返回 `444` |
+| PostgreSQL | 不对宿主机开放 | 容器内 `postgres:5432` | 两个独立数据库 |
+| Redis | 不对宿主机开放 | 容器内 `redis:6379` | Dujiao 缓存和队列 |
 
 管理员账号、初始密码、数据库密码、EPUSDT PID 和 Secret Key 保存在 `.env`。不要把 `.env` 提交到公开仓库，也不要把其中的值粘贴到日志、工单或聊天记录中。
 
 在后台修改管理员密码不会自动回写 `.env`。在 EPUSDT 后台轮换 Secret Key 后，还需要同步更新 Dujiao 支付渠道和 `.env` 中的记录。
+
+## 域名和 Nginx
+
+域名由 `.env` 中三个参数控制：
+
+```dotenv
+BASE_DOMAIN=abc123.com
+PUBLIC_SCHEME=http
+NGINX_HTTP_PORT=80
+```
+
+- `BASE_DOMAIN` 只填写根域名，不带协议、路径或末尾斜杠。
+- `www.${BASE_DOMAIN}` 反向代理到 Dujiao-Next。
+- `epusdt.${BASE_DOMAIN}` 反向代理到 EPUSDT。
+- `${BASE_DOMAIN}` 会保留路径和查询参数并跳转到 `www.${BASE_DOMAIN}`。
+- `PUBLIC_SCHEME` 表示浏览器实际使用的协议，也用于自动生成 EPUSDT 的公开 `app_uri`。
+
+公网部署时，在 DNS 服务商处添加指向服务器公网 IP 的记录：
+
+| 主机记录 | 类型 | 值 |
+| --- | --- | --- |
+| `www` | `A`（有 IPv6 时也可添加 `AAAA`） | 服务器公网 IP |
+| `epusdt` | `A`（有 IPv6 时也可添加 `AAAA`） | 服务器公网 IP |
+| `@` | `A`（可选） | 服务器公网 IP，用于根域名跳转 |
+
+只在本机测试且尚未配置 DNS 时，可临时添加 hosts 记录：
+
+```text
+127.0.0.1 abc123.com www.abc123.com epusdt.abc123.com
+```
+
+修改 `BASE_DOMAIN` 或 `PUBLIC_SCHEME` 后，需要重新创建 Nginx 和 EPUSDT 容器，使 Nginx 配置和 EPUSDT `app_uri` 同步更新：
+
+```bash
+docker compose --env-file .env up -d --no-deps --force-recreate epusdt nginx
+```
+
+当前 Compose 只监听 HTTP 端口，未自动申请或加载 TLS 证书。生产环境应在本 Nginx 或上游负载均衡器配置证书和 HTTPS 后，再把 `PUBLIC_SCHEME` 改成 `https`；未配置 TLS 时不要提前改成 `https`，否则跳转和支付收银台地址将无法访问。
 
 ## 数据库布局
 
@@ -43,13 +85,16 @@ Dujiao-Next `v1.4.1` 官方只实现 SQLite 和 PostgreSQL，不支持 MySQL。�
 ```text
 .
 |-- .env                              # 版本、端口和敏感参数
-|-- docker-compose.yml                # 四个服务的 Compose 配置
+|-- docker-compose.yml                # 五个服务的 Compose 配置
 |-- config/
 |   |-- config.yml                    # Dujiao-Next 配置
 |   `-- epusdt/epusdt.env             # EPUSDT 配置
 |-- docker/epusdt/
 |   |-- Dockerfile                    # 固定源码版本并构建兼容镜像
+|   |-- docker-entrypoint.sh          # 根据域名生成运行时配置
 |   `-- postgres-compat.patch         # EPUSDT v2.0.0 PostgreSQL 补丁
+|-- nginx/templates/
+|   `-- default.conf.template         # 按 BASE_DOMAIN 生成反代配置
 `-- data/
     |-- postgres/                     # PostgreSQL 数据目录
     |-- redis/                        # Redis AOF 数据
@@ -121,6 +166,7 @@ docker compose --env-file .env ps
 ```bash
 docker compose --env-file .env logs --tail=200 dujiao-next
 docker compose --env-file .env logs --tail=200 epusdt
+docker compose --env-file .env logs --tail=200 nginx
 docker compose --env-file .env logs --tail=200 postgres redis
 ```
 
@@ -129,6 +175,7 @@ docker compose --env-file .env logs --tail=200 postgres redis
 ```bash
 docker compose --env-file .env restart dujiao-next
 docker compose --env-file .env restart epusdt
+docker compose --env-file .env restart nginx
 ```
 
 停止全部服务但保留数据：
@@ -144,6 +191,9 @@ docker compose --env-file .env down
 ```bash
 curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8000/payments/gmpay/v1/config
+curl -H 'Host: www.abc123.com' http://127.0.0.1/health
+curl -H 'Host: epusdt.abc123.com' \
+  http://127.0.0.1/payments/gmpay/v1/config
 
 docker exec dujiao-next \
   wget -qO- http://epusdt:8000/payments/gmpay/v1/config
@@ -174,22 +224,22 @@ docker exec dujiaonext-postgres \
 
 | 字段 | 建议值 |
 | --- | --- |
-| `gateway_url` | 生产环境填写 EPUSDT 的公网 HTTPS 地址，例如 `https://pay.example.com` |
+| `gateway_url` | `${PUBLIC_SCHEME}://epusdt.${BASE_DOMAIN}`，例如 `http://epusdt.abc123.com` |
 | `pid` | `.env` 中的 `EPUSDT_PID` |
 | `secret_key` | `.env` 中的 `EPUSDT_SECRET_KEY` |
 | `order_mode` | `cashier` 或 `transaction` |
 | `token` | `transaction` 模式下填写，例如 `USDT` |
 | `network` | `transaction` 模式下填写，例如 `tron` |
 | `currency` | 通常填写 `cny` |
-| `notify_url` | `https://你的发卡域名/api/v1/payments/callback` |
+| `notify_url` | `${PUBLIC_SCHEME}://www.${BASE_DOMAIN}/api/v1/payments/callback` |
 | `return_url` | 买家支付完成后返回的发卡平台公网地址 |
 
 `http://epusdt:8000` 是 Docker 网络内地址，可用于 Dujiao 容器到 EPUSDT 的连通性检查，但不应作为生产支付渠道的 `gateway_url`。EPUSDT 返回的收银台 URL 会交给买家浏览器，浏览器无法解析 Docker 服务名 `epusdt`。
 
-同时将 `config/epusdt/epusdt.env` 中的 `app_uri` 改为 EPUSDT 的公网 HTTPS 地址。修改后重启 EPUSDT：
+EPUSDT 容器启动时会从 `BASE_DOMAIN` 和 `PUBLIC_SCHEME` 自动生成临时运行配置，例如 `app_uri=http://epusdt.abc123.com`。它不会修改宿主机上的 `config/epusdt/epusdt.env`。修改域名后应重新创建 EPUSDT 和 Nginx，而不只是执行 `restart`：
 
 ```bash
-docker compose --env-file .env restart epusdt
+docker compose --env-file .env up -d --no-deps --force-recreate epusdt nginx
 ```
 
 正式启用渠道前应使用小额订单完整验证下单、付款、链上确认、异步回调和发卡流程。
@@ -239,7 +289,7 @@ docker exec dujiaonext-postgres \
   > "$backup_dir/epusdt.dump"
 
 tar -czf "$backup_dir/config-and-files.tar.gz" \
-  .env config docker docker-compose.yml README.md data/uploads
+  .env config docker nginx docker-compose.yml README.md data/uploads
 ```
 
 备份包包含数据库、配置和密钥，应限制文件权限并存放到加密的异地介质。恢复前先停止两个应用容器，并确认目标数据库和备份版本。
@@ -255,6 +305,20 @@ http://127.0.0.1:8080/dj-mgmt-c1379b345ceb/
 ```
 
 实际路径以 `config/config.yml` 中的 `web.admin_path` 为准，修改后需要重启 Dujiao-Next。
+
+通过域名访问时，当前入口是：
+
+```text
+http://www.abc123.com/dj-mgmt-c1379b345ceb/
+```
+
+### 域名无法访问或返回 `502`
+
+- 确认 `www` 和 `epusdt` DNS 记录已经指向本机公网 IP。
+- 确认服务器安全组和防火墙允许 `NGINX_HTTP_PORT`，默认是 TCP `80`。
+- 运行 `docker compose --env-file .env ps`，确认 `nginx`、`dujiao-next` 和 `epusdt` 均为 `healthy`。
+- 查看 `docker compose --env-file .env logs --tail=200 nginx`。`502` 通常表示后端应用未健康运行。
+- 直接用 IP 访问可能收到空响应，因为 Nginx 会对未匹配 `BASE_DOMAIN` 的 Host 返回 `444`；应使用已配置的域名或带 `Host` 请求头测试。
 
 ### EPUSDT 出现安装向导
 
